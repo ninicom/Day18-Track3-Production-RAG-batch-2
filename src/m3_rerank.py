@@ -19,34 +19,86 @@ class RerankResult:
 
 
 class CrossEncoderReranker:
-    def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3"):
+    def __init__(self, model_name: str = "gemini-3-flash"):
         self.model_name = model_name
-        self._model = None
+        self._client = None
 
-    def _load_model(self):
-        if self._model is None:
-            # TODO: Load cross-encoder model
-            # from sentence_transformers import CrossEncoder
-            # self._model = CrossEncoder(self.model_name)
-            #
-            # ⚠️ LƯU Ý: Dùng sentence_transformers.CrossEncoder, KHÔNG dùng FlagEmbedding.
-            # FlagReranker crash với transformers>=5.0 (XLMRobertaTokenizer lỗi).
-            pass
-        return self._model
+    def _get_client(self):
+        if self._client is None:
+            from openai import OpenAI
+            self._client = OpenAI()
+        return self._client
 
-    def rerank(self, query: str, documents: list[dict], top_k: int = RERANK_TOP_K) -> list[RerankResult]:
-        """Rerank documents: top-20 → top-k."""
-        # TODO: Implement reranking
-        # 1. if not documents: return []
-        # 2. model = self._load_model()
-        # 3. pairs = [(query, doc["text"]) for doc in documents]
-        # 4. scores = model.predict(pairs)
-        # 5. if isinstance(scores, (int, float)): scores = [scores]
-        # 6. scored = sorted(zip(scores, documents), key=lambda x: x[0], reverse=True)
-        # 7. Return [RerankResult(text=..., original_score=doc.get("score", 0.0),
-        #            rerank_score=float(score), metadata=..., rank=i)
-        #            for i, (score, doc) in enumerate(scored[:top_k])]
-        return []
+    def rerank(self, query: str, results: list[dict], top_k: int = RERANK_TOP_K) -> list[RerankResult]:
+        if not results:
+            return []
+        
+        client = self._get_client()
+        scored_results = []
+        
+        # Để tiết kiệm thời gian/rate limit, ta chỉ dùng API rerank top 5-10
+        # Nếu muốn chấm hết thì vòng lặp qua từng kết quả
+        max_to_rerank = min(len(results), 5)
+        
+        max_to_rerank = min(len(results), 5)
+        
+        try:
+            from config import get_llm
+            import json as _json
+            client = get_llm()
+            
+            input_docs = [{"id": i, "text": results[i]["text"]} for i in range(max_to_rerank)]
+            prompt_input = _json.dumps(input_docs, ensure_ascii=False)
+            
+            prompt = f"""Đánh giá mức độ liên quan của các Đoạn văn với Câu hỏi.
+Câu hỏi: {query}
+
+Đầu vào là mảng JSON chứa các Đoạn văn.
+Đầu ra PHẢI LÀ MỘT MẢNG JSON các số float từ 0.0 đến 1.0 (1.0 là cực kỳ liên quan), tương ứng với từng Đoạn văn theo đúng thứ tự.
+Ví dụ đầu ra: [0.9, 0.2, 0.5]
+Tuyệt đối không trả về bất kỳ text nào ngoài mảng JSON.
+
+Đầu vào:
+{prompt_input}"""
+            response = client.invoke(prompt)
+            content = response.content.strip()
+            
+            # Parse JSON array
+            start_idx = content.find('[')
+            end_idx = content.rfind(']')
+            if start_idx != -1 and end_idx != -1:
+                content = content[start_idx:end_idx+1]
+            
+            scores = _json.loads(content)
+            if not isinstance(scores, list) or len(scores) != max_to_rerank:
+                scores = [results[i]["score"] for i in range(max_to_rerank)]
+        except Exception as e:
+            print(f"  ⚠️  API Rerank batch failed: {e}")
+            scores = [results[i]["score"] for i in range(max_to_rerank)]
+
+        for i in range(max_to_rerank):
+            res = results[i]
+            scored_results.append(RerankResult(
+                text=res["text"],
+                original_score=res["score"],
+                rerank_score=float(scores[i]),
+                metadata=res.get("metadata", {}),
+                rank=0
+            ))
+            
+        # Thêm các kết quả còn lại với điểm 0 để không lọt top trên
+        for i in range(max_to_rerank, len(results)):
+            res = results[i]
+            scored_results.append(RerankResult(
+                text=res["text"], original_score=res["score"],
+                rerank_score=0.0, metadata=res.get("metadata", {}), rank=0
+            ))
+            
+        scored_results.sort(key=lambda x: x.rerank_score, reverse=True)
+        for i, item in enumerate(scored_results):
+            item.rank = i + 1
+            
+        return scored_results[:top_k]
 
 
 class FlashrankReranker:

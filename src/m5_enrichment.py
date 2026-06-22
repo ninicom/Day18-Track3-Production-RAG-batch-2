@@ -151,71 +151,121 @@ def extract_metadata(text: str) -> dict:
     return {}
 
 
-# ─── Combined Single-Call Mode ───────────────────────────
-
-
-def _enrich_single_call(text: str, source: str) -> dict:
-    """Single LLM call to get summary + questions + context + metadata.
-
-    ⚠️ Cost optimization: 1 API call thay vì 4 calls riêng lẻ.
-    """
-    # TODO: Implement combined enrichment (1 call/chunk)
-    # if OPENAI_API_KEY:
-    #     try:
-    #         import json as _json
-    #         from openai import OpenAI
-    #         client = OpenAI()
-    #         resp = client.chat.completions.create(
-    #             model="gpt-4o-mini",
-    #             messages=[
-    #                 {"role": "system", "content": """Phân tích đoạn văn và trả về JSON:
-    # {
-    #   "summary": "tóm tắt 2-3 câu",
-    #   "questions": ["câu hỏi 1", "câu hỏi 2", "câu hỏi 3"],
-    #   "context": "1 câu mô tả đoạn văn nằm ở đâu trong tài liệu",
-    #   "metadata": {"topic": "...", "entities": ["..."], "category": "policy|hr|it|finance", "language": "vi|en"}
-    # }"""},
-    #                 {"role": "user", "content": f"Tài liệu: {source}\n\nĐoạn văn:\n{text}"},
-    #             ],
-    #             max_tokens=400,
-    #         )
-    #         return _json.loads(resp.choices[0].message.content)
-    #     except Exception as e:
-    #         print(f"  ⚠️  Enrichment API failed: {e}")
-    return {}
-
-
-# ─── Full Enrichment Pipeline ────────────────────────────
+def _enrich_batch_call(texts: list[str], sources: list[str]) -> list[dict]:
+    if OPENAI_API_KEY:
+        try:
+            import json as _json
+            from config import get_llm
+            import time
+            time.sleep(2)
+            client = get_llm()
+            
+            input_data = []
+            for t, s in zip(texts, sources):
+                input_data.append({"source": s, "text": t})
+                
+            prompt_input = _json.dumps(input_data, ensure_ascii=False, indent=2)
+            
+            resp = client.invoke([
+                ("system", """Phân tích danh sách các đoạn văn dưới đây.
+Đầu vào là một mảng JSON các object gồm "source" và "text".
+Đầu ra PHẢI LÀ MỘT MẢNG JSON CÓ CÙNG ĐỘ DÀI, đúng thứ tự tương ứng với đầu vào.
+Tuyệt đối không trả về bất kỳ text nào ngoài mảng JSON.
+Định dạng mỗi phần tử trong mảng trả về:
+{
+  "summary": "tóm tắt 2-3 câu",
+  "questions": ["câu hỏi 1", "câu hỏi 2", "câu hỏi 3"],
+  "context": "1 câu mô tả đoạn văn nằm ở đâu trong tài liệu",
+  "metadata": {"topic": "...", "entities": ["..."], "category": "policy|hr|it|finance", "language": "vi|en"}
+}"""),
+                ("user", f"Đầu vào:\n{prompt_input}")
+            ])
+            content = resp.content.strip()
+            if content.startswith("```"):
+                lines = content.split('\n')
+                if lines[0].startswith("```"): lines = lines[1:]
+                if lines and lines[-1].startswith("```"): lines = lines[:-1]
+                content = '\n'.join(lines).strip()
+            
+            # Find the JSON array
+            start_idx = content.find('[')
+            end_idx = content.rfind(']')
+            if start_idx != -1 and end_idx != -1:
+                content = content[start_idx:end_idx+1]
+                
+            results = _json.loads(content)
+            if isinstance(results, list) and len(results) == len(texts):
+                return results
+            else:
+                print(f"  ⚠️  Batch size mismatch: expected {len(texts)}, got {len(results) if isinstance(results, list) else 0}")
+                return [{}] * len(texts)
+        except Exception as e:
+            print(f"  ⚠️  Enrichment Batch API failed: {e}")
+    return [{}] * len(texts)
 
 
 def enrich_chunks(
     chunks: list[dict],
     methods: list[str] | None = None,
 ) -> list[EnrichedChunk]:
-    """
-    Chạy enrichment pipeline trên danh sách chunks. (Đã implement sẵn — dùng functions ở trên)
-
-    Có 2 chế độ:
-    - methods cụ thể (["summary"], ["contextual"]...): gọi từng function riêng (tốt cho học/debug)
-    - methods=["combined"] hoặc None: 1 API call duy nhất cho tất cả (tốt cho production)
-
-    Args:
-        chunks: List of {"text": str, "metadata": dict}
-        methods: Default None → combined mode (1 call/chunk).
-                 Options: "summary", "hyqa", "contextual", "metadata", "combined"
-    """
     if methods is None:
         methods = ["combined"]
 
     use_combined = "combined" in methods
+    
+    import json as _json
+    import hashlib
+    cache_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "enrichment_cache.json")
+    cache = {}
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cache = _json.load(f)
+        except Exception:
+            pass
 
     enriched = []
+    
+    if use_combined:
+        # 1. Identify uncached chunks
+        uncached_indices = []
+        uncached_texts = []
+        uncached_sources = []
+        
+        for i, chunk in enumerate(chunks):
+            text = chunk["text"]
+            chunk_hash = hashlib.md5(text.encode("utf-8")).hexdigest()
+            if chunk_hash not in cache:
+                uncached_indices.append(i)
+                uncached_texts.append(text)
+                uncached_sources.append(chunk.get("metadata", {}).get("source", ""))
+                
+        # 2. Process in batches to avoid token limits
+        batch_size = 25
+        for i in range(0, len(uncached_texts), batch_size):
+            batch_texts = uncached_texts[i:i+batch_size]
+            batch_sources = uncached_sources[i:i+batch_size]
+            print(f"  Processing batch {i//batch_size + 1}/{(len(uncached_texts)+batch_size-1)//batch_size} ({len(batch_texts)} chunks)...", flush=True)
+            batch_results = _enrich_batch_call(batch_texts, batch_sources)
+            
+            for j, result in enumerate(batch_results):
+                if result:
+                    text_idx = i + j
+                    orig_text = batch_texts[j]
+                    chunk_hash = hashlib.md5(orig_text.encode("utf-8")).hexdigest()
+                    cache[chunk_hash] = result
+                    
+            with open(cache_file, "w", encoding="utf-8") as f:
+                _json.dump(cache, f, ensure_ascii=False, indent=2)
+                
     for i, chunk in enumerate(chunks):
         text = chunk["text"]
         source = chunk.get("metadata", {}).get("source", "")
 
         if use_combined:
-            result = _enrich_single_call(text, source)
+            chunk_hash = hashlib.md5(text.encode("utf-8")).hexdigest()
+            result = cache.get(chunk_hash, {})
+
             summary = result.get("summary", "")
             questions = result.get("questions", [])
             context_line = result.get("context", "")
@@ -236,9 +286,7 @@ def enrich_chunks(
             method="+".join(methods),
         ))
 
-        if (i + 1) % 10 == 0 or (i + 1) == len(chunks):
-            print(f"  Enriched {i + 1}/{len(chunks)} chunks...", flush=True)
-
+    print(f"  ✓ Enriched {len(chunks)} chunks", flush=True)
     return enriched
 
 

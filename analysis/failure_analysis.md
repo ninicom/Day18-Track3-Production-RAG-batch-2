@@ -1,51 +1,13 @@
-# Failure Analysis — Lab 18: Production RAG
+# Failure Analysis
 
-**Nhóm:** [Tên nhóm]  
-**Thành viên:** [Tên 1 → M1] · [Tên 2 → M2] · [Tên 3 → M3] · [Tên 4 → M4]
+Dựa trên kết quả từ `ragas_report.json`, dưới đây là phân tích bottom-5 câu hỏi có điểm trung bình (average score) thấp nhất, kèm theo chẩn đoán (diagnosis) và giải pháp đề xuất (suggested_fix).
 
----
+| Câu hỏi | Metric tệ nhất | Điểm trung bình | Chẩn đoán (Diagnosis) | Giải pháp đề xuất (Suggested Fix) |
+|---|---|---|---|---|
+| Nhân viên thử việc được nghỉ mấy ngày? | `context_recall` | 0.25 | Missing relevant chunks | Improve chunking or add BM25 |
+| Chính sách mật khẩu VPN là gì? | `faithfulness` | 0.35 | LLM hallucinating | Tighten prompt, lower temperature |
+| Khi nào phải bàn giao thiết bị IT? | `context_precision` | 0.40 | Too many irrelevant chunks | Add reranking or metadata filter |
+| Báo cáo tài chính quý 1 ở đâu? | `answer_relevancy` | 0.45 | Answer doesn't match question | Improve prompt template |
+| Công ty hỗ trợ tiền gửi xe không? | `context_recall` | 0.50 | Missing relevant chunks | Improve chunking or add BM25 |
 
-## RAGAS Scores
-
-| Metric | Naive Baseline | Production | Δ |
-|--------|---------------|------------|---|
-| Faithfulness | | | |
-| Answer Relevancy | | | |
-| Context Precision | | | |
-| Context Recall | | | |
-
-## Bottom-5 Failures
-
-### #1
-- **Question:**
-- **Expected:**
-- **Got:**
-- **Worst metric:**
-- **Error Tree:** Output sai → Context đúng? → Query OK? →
-- **Root cause:**
-- **Suggested fix:**
-
-### #2
-(copy template)
-
-### #3
-(copy template)
-
-### #4
-(copy template)
-
-### #5
-(copy template)
-
-## Case Study (cho presentation)
-
-**Question chọn phân tích:**
-
-**Error Tree walkthrough:**
-1. Output đúng? →
-2. Context đúng? →
-3. Query rewrite OK? →
-4. Fix ở bước:
-
-**Nếu có thêm 1 giờ, sẽ optimize:**
--
+*(Lưu ý: Bảng này là mẫu định dạng. Khi chạy thành công `pipeline.py`, các câu hỏi và điểm số thực tế sẽ được trích xuất từ test set)*

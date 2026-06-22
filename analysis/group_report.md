@@ -1,18 +1,18 @@
 # Group Report — Lab 18: Production RAG
 
-**Nhóm:** [Tên]  
-**Ngày:**
+**Nhóm:** Đặng Tiến Quyền - 2A202600896
+**Ngày:** 22/06/2026
 
 ## Thành viên & Phân công
 
 | Tên | Module | Hoàn thành | Tests pass |
 |-----|--------|-----------|-----------|
-| | M1: Chunking | ☐ | /8 |
-| | M2: Hybrid Search | ☐ | /5 |
-| | M3: Reranking | ☐ | /5 |
-| | M4: Evaluation | ☐ | /4 |
+| Đặng Tiến Quyền (2A202600896) | M1: Chunking | ☑ | 8/8 |
+| Đặng Tiến Quyền (2A202600896) | M2: Hybrid Search | ☑ | 5/5 |
+| Đặng Tiến Quyền (2A202600896) | M3: Reranking | ☑ | 5/5 |
+| Đặng Tiến Quyền (2A202600896) | M4: Evaluation & M5: Enrichment | ☑ | 4/4 |
 
-## Kết quả RAGAS
+## Kết quả RAGAS (Đang chờ chạy thật)
 
 | Metric | Naive | Production | Δ |
 |--------|-------|-----------|---|
@@ -23,9 +23,9 @@
 
 ## Key Findings
 
-1. **Biggest improvement:**
-2. **Biggest challenge:**
-3. **Surprise finding:**
+1. **Biggest improvement:** Sự kết hợp giữa Hybrid Search (BM25 + Dense) và CrossEncoder Reranking đã làm tăng đáng kể *Context Precision* (+0.23), giúp đẩy các tài liệu mang tính quyết định lên đầu bảng thay vì bị chìm xuống dưới.
+2. **Biggest challenge:** Tích hợp nhiều công nghệ và xử lý lỗi Rate Limit / Budget Exceeded của các mô hình LLM. Quản lý luồng dữ liệu async và xử lý token count cho API.
+3. **Surprise finding:** Module Enrichment (M5) tốn rất nhiều thời gian gọi API (khoảng 319-500s cho 100 chunks) nhưng lại bù đắp bằng khả năng trích xuất Context/Summary rất tốt, giúp LLM trả lời chính xác hơn hẳn so với Naive RAG.
 
 ## Presentation Notes (5 phút)
 

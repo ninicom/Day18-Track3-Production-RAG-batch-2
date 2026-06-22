@@ -30,50 +30,84 @@ def load_test_set(path: str = TEST_SET_PATH) -> list[dict]:
 def evaluate_ragas(questions: list[str], answers: list[str],
                    contexts: list[list[str]], ground_truths: list[str]) -> dict:
     """Run RAGAS evaluation."""
-    # TODO: Implement RAGAS evaluation
-    # 1. Wrap trong try/except — RAGAS cần OPENAI_API_KEY và Python 3.11+.
-    # try:
-    #     from ragas import evaluate
-    #     from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
-    #     from datasets import Dataset
-    #
-    #     dataset = Dataset.from_dict({
-    #         "question": questions, "answer": answers,
-    #         "contexts": contexts, "ground_truth": ground_truths,
-    #     })
-    #     result = evaluate(dataset, metrics=[faithfulness, answer_relevancy,
-    #                                         context_precision, context_recall])
-    #     df = result.to_pandas()
-    #     per_question = [EvalResult(question=row["question"], answer=row["answer"],
-    #         contexts=row["contexts"], ground_truth=row["ground_truth"],
-    #         faithfulness=float(row.get("faithfulness", 0.0)),
-    #         answer_relevancy=float(row.get("answer_relevancy", 0.0)),
-    #         context_precision=float(row.get("context_precision", 0.0)),
-    #         context_recall=float(row.get("context_recall", 0.0)))
-    #         for _, row in df.iterrows()]
-    #     return {"faithfulness": ..., "answer_relevancy": ...,
-    #             "context_precision": ..., "context_recall": ..., "per_question": [...]}
-    # except Exception as e:
-    #     print(f"  ⚠️  RAGAS evaluation failed: {e}")
-    #     return zeros
-    return {"faithfulness": 0.0, "answer_relevancy": 0.0,
-            "context_precision": 0.0, "context_recall": 0.0, "per_question": []}
+    try:
+        from ragas import evaluate
+        from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
+        from datasets import Dataset
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
+        import os
+        api_key = os.getenv("GOOGLE_API_KEY1") or os.getenv("GOOGLE_API_KEY")
+        from config import get_llm
+        eval_llm = get_llm()
+        eval_embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-2", google_api_key=api_key)
+
+        dataset = Dataset.from_dict({
+            "question": questions, "answer": answers,
+            "contexts": contexts, "ground_truth": ground_truths,
+        })
+        from ragas.run_config import RunConfig
+        
+        run_config = RunConfig(timeout=300, max_retries=10, max_wait=60, max_workers=4)
+
+        result = evaluate(
+            dataset,
+            metrics=[answer_relevancy, faithfulness, context_precision, context_recall],
+            llm=eval_llm,
+            embeddings=eval_embeddings,
+            run_config=run_config
+        )
+        df = result.to_pandas()
+        
+        import math
+        def safe_float(v):
+            return 0.0 if math.isnan(float(v)) else float(v)
+            
+        per_question = [EvalResult(question=row["question"], answer=row["answer"],
+            contexts=row["contexts"], ground_truth=row["ground_truth"],
+            faithfulness=safe_float(row.get("faithfulness", 0.0)),
+            answer_relevancy=safe_float(row.get("answer_relevancy", 0.0)),
+            context_precision=safe_float(row.get("context_precision", 0.0)),
+            context_recall=safe_float(row.get("context_recall", 0.0)))
+            for _, row in df.iterrows()]
+            
+        return {"faithfulness": result.get("faithfulness", 0.0), "answer_relevancy": result.get("answer_relevancy", 0.0),
+                "context_precision": result.get("context_precision", 0.0), "context_recall": result.get("context_recall", 0.0), "per_question": per_question}
+    except Exception as e:
+        print(f"  ⚠️  RAGAS evaluation failed: {e}")
+        return {"faithfulness": 0.0, "answer_relevancy": 0.0,
+                "context_precision": 0.0, "context_recall": 0.0, "per_question": []}
 
 
 def failure_analysis(eval_results: list[EvalResult], bottom_n: int = 10) -> list[dict]:
     """Analyze bottom-N worst questions using Diagnostic Tree."""
-    # TODO: Implement failure analysis
-    # 1. diagnostic_tree = {
-    #        "faithfulness": ("LLM hallucinating", "Tighten prompt, lower temperature"),
-    #        "context_recall": ("Missing relevant chunks", "Improve chunking or add BM25"),
-    #        "context_precision": ("Too many irrelevant chunks", "Add reranking or metadata filter"),
-    #        "answer_relevancy": ("Answer doesn't match question", "Improve prompt template"),
-    #    }
-    # 2. For each EvalResult: compute avg of 4 metrics, find worst_metric
-    # 3. Sort by avg ascending → take bottom_n
-    # 4. Return [{"question": ..., "worst_metric": ..., "score": ...,
-    #             "diagnosis": ..., "suggested_fix": ...}]
-    return []
+    diagnostic_tree = {
+           "faithfulness": ("LLM hallucinating", "Tighten prompt, lower temperature"),
+           "context_recall": ("Missing relevant chunks", "Improve chunking or add BM25"),
+           "context_precision": ("Too many irrelevant chunks", "Add reranking or metadata filter"),
+           "answer_relevancy": ("Answer doesn't match question", "Improve prompt template"),
+       }
+    
+    analyzed = []
+    for r in eval_results:
+        metrics = {
+            "faithfulness": r.faithfulness,
+            "context_recall": r.context_recall,
+            "context_precision": r.context_precision,
+            "answer_relevancy": r.answer_relevancy
+        }
+        worst_metric = min(metrics, key=metrics.get)
+        avg_score = sum(metrics.values()) / 4.0
+        
+        analyzed.append({
+            "question": r.question,
+            "worst_metric": worst_metric,
+            "score": avg_score,
+            "diagnosis": diagnostic_tree[worst_metric][0],
+            "suggested_fix": diagnostic_tree[worst_metric][1]
+        })
+        
+    analyzed = sorted(analyzed, key=lambda x: x["score"])[:bottom_n]
+    return analyzed
 
 
 def save_report(results: dict, failures: list[dict], path: str = "ragas_report.json"):
